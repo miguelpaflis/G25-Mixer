@@ -185,9 +185,7 @@ function computeMix(){
   });
 
   const label = document.getElementById('label').value || 'GHOST_MIX';
-  const mode = document.getElementById('mode').value;
-  const line = label + ':' + mode + ',' + acc.map(x => Number.isFinite(x) ? x.toFixed(6) : 'NaN').join(',');
-  document.getElementById('out').textContent = line;
+  const line = label + ',' + acc.map(x => Number.isFinite(x) ? x.toFixed(12) : 'NaN').join(',');  document.getElementById('out').textContent = line;
 
   // prepare CSV
   const csv = label + ',' + acc.join(',') + '\n';
