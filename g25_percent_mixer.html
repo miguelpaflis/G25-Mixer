@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>G25 Percent Mixer (local)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;line-height:1.35}
+ h1{font-size:1.6rem;margin-bottom:4px}
+ small{color:#666}
+ textarea{width:100%;min-height:180px;font-family:ui-monospace,Menlo,Consolas,monospace}
+ .row{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}
+ .col{flex:1 1 320px}
+ table{width:100%;border-collapse:collapse;font-size:0.92rem}
+ th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
+ th{background:#f7f7f7}
+ input[type="number"]{width:80px}
+ .pill{display:inline-block;background:#eef;border:1px solid #ccd;padding:2px 6px;border-radius:6px;margin:2px 4px;cursor:pointer}
+ .btn{display:inline-block;padding:8px 12px;border:1px solid #333;border-radius:6px;background:#111;color:#fff;text-decoration:none;cursor:pointer}
+ .btn.secondary{background:#f5f5f5;color:#111}
+ .box{border:1px solid #e0e0e0;border-radius:8px;padding:12px;background:#fff}
+ .muted{color:#777}
+ .flex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ .right{float:right}
+ code{background:#f5f5f5;padding:2px 4px;border-radius:4px}
+ .sticky{position:sticky;top:0;background:#fff;z-index:10;padding:8px 0;border-bottom:1px solid #eee}
+</style>
+</head>
+<body>
+  <div class="sticky">
+    <h1>G25 Percent Mixer</h1>
+    <small>Paste a G25 sheet (Davidski format: <code>Name,val1,val2,...,val25</code>). Pick sources, set % weights, and get mixed coordinates.</small>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <div class="box">
+        <h3>1) Paste G25 reference lines</h3>
+        <textarea id="input" placeholder="Modern_Sample:ABC,0.123,0.045,... (25 values)&#10;Ancient_Sample:XYZ,0.012,-0.034,..."></textarea>
+        <div class="flex" style="margin-top:8px">
+          <button class="btn" onclick="parseInput()">Parse</button>
+          <span class="muted">Tip: You can paste multiple lines. Lines starting with <code>#</code> are ignored.</span>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="box">
+        <h3>2) Add sources & percentages</h3>
+        <div class="flex">
+          <input id="filter" placeholder="Filter names…" oninput="renderList()" style="flex:1 1 200px;padding:8px;border:1px solid #ccc;border-radius:6px">
+          <button class="btn secondary" onclick="clearMix()">Clear mix</button>
+        </div>
+        <div id="names" style="margin:8px 0;max-height:180px;overflow:auto"></div>
+        <table>
+          <thead><tr><th>Source</th><th>%</th><th>Remove</th></tr></thead>
+          <tbody id="mixBody"></tbody>
+          <tfoot><tr><th>Total</th><th id="totalPct">0</th><th></th></tr></tfoot>
+        </table>
+        <div style="margin-top:8px" class="muted">Percentages are auto-normalized if they don't sum to 100.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3>3) Mixed coordinates</h3>
+    <div class="flex">
+      <button class="btn" onclick="computeMix()">Compute</button>
+      <button class="btn secondary" onclick="copyOut()">Copy to clipboard</button>
+      <a id="dl" class="btn secondary" download="mixed_g25.csv">Download CSV</a>
+      <label class="muted">Label: <input id="label" value="GHOST_MIX"></label>
+      <span class="muted">Mode: <select id="mode"><option>scaled</option><option>unscaled</option></select></span>
+    </div>
+    <pre id="out" style="white-space:pre-wrap;margin-top:8px"></pre>
+  </div>
+
+<script>
+let db = {}; // name -> [25 floats]
+let order = []; // preserve insertion
+let mix = {}; // name -> percent
+
+function parseLine(line){
+  line = line.trim();
+  if(!line || line.startsWith('#')) return null;
+  let parts = line.split(',');
+  if(parts.length < 26) return null;
+  let name = parts[0].trim();
+  // Allow "Name:ID" or plain Name
+  name = name.replace(/^"+|"+$/g,'');
+  let vals = parts.slice(1).map(Number);
+  if(vals.length !== 25 || vals.some(v => Number.isNaN(v))) return null;
+  return {name, vals};
+}
+
+function parseInput(){
+  db = {}; order = []; mix = {};
+  const txt = document.getElementById('input').value;
+  txt.split(/\r?\n/).forEach(line => {
+    const rec = parseLine(line);
+    if(rec){
+      if(!(rec.name in db)){ order.push(rec.name); }
+      db[rec.name] = rec.vals;
+    }
+  });
+  renderList();
+  renderMix();
+}
+
+function renderList(){
+  const q = (document.getElementById('filter').value || '').toLowerCase();
+  const box = document.getElementById('names');
+  box.innerHTML = '';
+  order.filter(n => n.toLowerCase().includes(q)).slice(0,500).forEach(n => {
+    const span = document.createElement('span');
+    span.className = 'pill';
+    span.textContent = n;
+    span.title = 'Add to mix';
+    span.onclick = () => addToMix(n);
+    box.appendChild(span);
+  });
+  if(!order.length){
+    box.innerHTML = '<span class="muted">Nothing parsed yet. Paste a G25 sheet above and click Parse.</span>';
+  }
+}
+
+function addToMix(name){
+  if(!(name in db)) return;
+  if(!(name in mix)) mix[name] = 0;
+  mix[name] = mix[name] || 0;
+  mix[name] += 10; // default add 10%
+  renderMix();
+}
+
+function removeFromMix(name){
+  delete mix[name];
+  renderMix();
+}
+
+function clearMix(){
+  mix = {}; renderMix();
+}
+
+function renderMix(){
+  const tb = document.getElementById('mixBody');
+  tb.innerHTML = '';
+  let total = 0;
+  Object.entries(mix).forEach(([name,pct]) => {
+    total += Number(pct)||0;
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td'); td1.textContent = name;
+    const td2 = document.createElement('td');
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.step = '0.1'; inp.value = pct;
+    inp.oninput = (e)=>{ mix[name] = parseFloat(e.target.value)||0; updateTotal(); };
+    td2.appendChild(inp);
+    const td3 = document.createElement('td');
+    const del = document.createElement('button'); del.textContent='✕'; del.className='btn secondary';
+    del.onclick = ()=> removeFromMix(name);
+    td3.appendChild(del);
+    tr.append(td1,td2,td3);
+    tb.appendChild(tr);
+  });
+  document.getElementById('totalPct').textContent = (Object.values(mix).reduce((a,b)=>a+(Number(b)||0),0)).toFixed(1);
+}
+
+function updateTotal(){
+  document.getElementById('totalPct').textContent = (Object.values(mix).reduce((a,b)=>a+(Number(b)||0),0)).toFixed(1);
+}
+
+function computeMix(){
+  const keys = Object.keys(mix);
+  if(keys.length === 0){ alert('Add at least one source.'); return; }
+  // normalize weights
+  let wsum = 0;
+  keys.forEach(k => wsum += Math.max(0, Number(mix[k])||0));
+  if(wsum <= 0){ alert('Weights must be >0.'); return; }
+  const w = {}; keys.forEach(k => w[k] = (Math.max(0, Number(mix[k])||0))/wsum);
+
+  // weighted sum across 25 dims
+  const acc = new Array(25).fill(0);
+  keys.forEach(k => {
+    const v = db[k];
+    if(!v || v.length !== 25) return;
+    for(let i=0;i<25;i++) acc[i] += v[i]*w[k];
+  });
+
+  const label = document.getElementById('label').value || 'GHOST_MIX';
+  const mode = document.getElementById('mode').value;
+  const line = label + ':' + mode + ',' + acc.map(x => Number.isFinite(x) ? x.toFixed(6) : 'NaN').join(',');
+  document.getElementById('out').textContent = line;
+
+  // prepare CSV
+  const csv = label + ',' + acc.join(',') + '\n';
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.getElementById('dl');
+  a.href = url;
+}
+
+function copyOut(){
+  const txt = document.getElementById('out').textContent || '';
+  if(!txt){ alert('Nothing to copy. Click Compute first.'); return; }
+  navigator.clipboard.writeText(txt).then(()=>{
+    alert('Copied mixed coordinates to clipboard.');
+  });
+}
+</script>
+</body>
+</html>
